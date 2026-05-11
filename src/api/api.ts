@@ -164,8 +164,39 @@ export async function apiGetFetch(params: {
 }
 
 /**
+ * Combine an internal timeout AbortController with an optional external AbortSignal
+ * (e.g. provided by the gateway when stopping a channel) so the underlying `fetch`
+ * is aborted as soon as either fires. Returns the signal to pass to `fetch` plus
+ * a `cleanup` function that releases the listener attached to the external signal.
+ */
+function combineAbortSignals(
+  internal: AbortController,
+  external: AbortSignal | undefined,
+): { signal: AbortSignal; cleanup: () => void } {
+  if (!external) return { signal: internal.signal, cleanup: () => {} };
+  // Forward an external abort to the internal controller so the existing
+  // `name === "AbortError"` handling kicks in uniformly.
+  if (external.aborted) {
+    internal.abort();
+    return { signal: internal.signal, cleanup: () => {} };
+  }
+  const onExternalAbort = () => internal.abort();
+  external.addEventListener("abort", onExternalAbort, { once: true });
+  return {
+    signal: internal.signal,
+    cleanup: () => external.removeEventListener("abort", onExternalAbort),
+  };
+}
+
+/**
  * Common fetch wrapper: POST JSON to a Weixin API endpoint with timeout + abort.
  * Returns the raw response text on success; throws on HTTP error or timeout.
+ *
+ * When `abortSignal` is provided, an external abort (e.g. gateway channel stop)
+ * cancels the in-flight request immediately instead of waiting for `timeoutMs`.
+ * Without this, a long-poll `getUpdates` would keep running until its own client
+ * timeout (~35s), well past the gateway's 5s channel-stop budget — which leaves
+ * the gateway unable to restart the channel after a config hot reload (#141).
  */
 async function apiPostFetch(params: {
   baseUrl: string;
@@ -174,6 +205,7 @@ async function apiPostFetch(params: {
   token?: string;
   timeoutMs: number;
   label: string;
+  abortSignal?: AbortSignal;
 }): Promise<string> {
   const base = ensureTrailingSlash(params.baseUrl);
   const url = new URL(params.endpoint, base);
@@ -182,14 +214,16 @@ async function apiPostFetch(params: {
 
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), params.timeoutMs);
+  const { signal, cleanup } = combineAbortSignals(controller, params.abortSignal);
   try {
     const res = await fetch(url.toString(), {
       method: "POST",
       headers: hdrs,
       body: params.body,
-      signal: controller.signal,
+      signal,
     });
     clearTimeout(t);
+    cleanup();
     const rawText = await res.text();
     logger.debug(`${params.label} status=${res.status} raw=${redactBody(rawText)}`);
     if (!res.ok) {
@@ -198,6 +232,7 @@ async function apiPostFetch(params: {
     return rawText;
   } catch (err) {
     clearTimeout(t);
+    cleanup();
     throw err;
   }
 }
@@ -213,6 +248,13 @@ export async function getUpdates(
     baseUrl: string;
     token?: string;
     timeoutMs?: number;
+    /**
+     * Optional external abort signal (e.g. from the gateway when stopping the
+     * channel). When this aborts, the in-flight long-poll is terminated
+     * immediately so the monitor loop can exit well within the gateway's
+     * channel-stop budget (#141).
+     */
+    abortSignal?: AbortSignal;
   },
 ): Promise<GetUpdatesResp> {
   const timeout = params.timeoutMs ?? DEFAULT_LONG_POLL_TIMEOUT_MS;
@@ -227,13 +269,22 @@ export async function getUpdates(
       token: params.token,
       timeoutMs: timeout,
       label: "getUpdates",
+      abortSignal: params.abortSignal,
     });
     const resp: GetUpdatesResp = JSON.parse(rawText);
     return resp;
   } catch (err) {
-    // Long-poll timeout is normal; return empty response so caller can retry
+    // Long-poll timeout *or* external abort both surface as AbortError. The caller
+    // re-checks `abortSignal?.aborted` after we return; when aborted, it exits
+    // the loop. When not aborted (i.e. plain client-side long-poll timeout),
+    // returning the empty response lets the caller retry — preserving prior
+    // behavior for the normal long-poll case.
     if (err instanceof Error && err.name === "AbortError") {
-      logger.debug(`getUpdates: client-side timeout after ${timeout}ms, returning empty response`);
+      if (params.abortSignal?.aborted) {
+        logger.debug(`getUpdates: aborted by external signal`);
+      } else {
+        logger.debug(`getUpdates: client-side timeout after ${timeout}ms, returning empty response`);
+      }
       return { ret: 0, msgs: [], get_updates_buf: params.get_updates_buf };
     }
     throw err;
