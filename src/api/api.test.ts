@@ -24,7 +24,7 @@ vi.mock("node:crypto", () => ({
   },
 }));
 
-import { getUpdates, getUploadUrl, sendMessage, getConfig, sendTyping } from "./api.js";
+import { getUpdates, getUploadUrl, sendMessage, getConfig, sendTyping, sanitizeBotAgent } from "./api.js";
 
 function mockResponse(body: object | string, status = 200, ok = true): Response {
   const text = typeof body === "string" ? body : JSON.stringify(body);
@@ -163,5 +163,93 @@ describe("sendTyping", () => {
     await expect(
       sendTyping({ baseUrl: "https://api.example.com/", body: {} }),
     ).rejects.toThrow("sendTyping 500");
+  });
+});
+
+describe("sanitizeBotAgent", () => {
+  it("returns default when input is empty / undefined / whitespace", () => {
+    expect(sanitizeBotAgent(undefined)).toBe("OpenClaw");
+    expect(sanitizeBotAgent("")).toBe("OpenClaw");
+    expect(sanitizeBotAgent("   ")).toBe("OpenClaw");
+    expect(sanitizeBotAgent("\t\n")).toBe("OpenClaw");
+  });
+
+  it("passes through a single valid product", () => {
+    expect(sanitizeBotAgent("MyBot/1.2.0")).toBe("MyBot/1.2.0");
+  });
+
+  it("passes through multiple space-separated products", () => {
+    expect(sanitizeBotAgent("MyBot/1.2.0 LangChain/0.3.5")).toBe(
+      "MyBot/1.2.0 LangChain/0.3.5",
+    );
+  });
+
+  it("preserves a (comment) attached to a product", () => {
+    expect(sanitizeBotAgent("MyBot/1.2.0 (region=cn;env=prod)")).toBe(
+      "MyBot/1.2.0 (region=cn;env=prod)",
+    );
+  });
+
+  it("supports multi-word comments", () => {
+    expect(sanitizeBotAgent("MyBot/1.2.0 (built on linux)")).toBe(
+      "MyBot/1.2.0 (built on linux)",
+    );
+  });
+
+  it("accepts semver pre-release and build metadata", () => {
+    expect(sanitizeBotAgent("MyBot/1.2.0-rc.1+build.5")).toBe(
+      "MyBot/1.2.0-rc.1+build.5",
+    );
+  });
+
+  it("drops tokens that fail to parse, keeps valid ones", () => {
+    // "My Bot" splits into "My" and "Bot" — neither matches Name/Version, both dropped.
+    // The trailing valid product is kept.
+    expect(sanitizeBotAgent("My Bot ValidApp/1.0")).toBe("ValidApp/1.0");
+  });
+
+  it("falls back to default when all tokens are invalid", () => {
+    expect(sanitizeBotAgent("garbage no slashes here")).toBe("OpenClaw");
+  });
+
+  it("drops non-ASCII characters by failing the token regex", () => {
+    // "中文/1.0" contains non-ASCII chars in name → token rejected.
+    expect(sanitizeBotAgent("中文/1.0")).toBe("OpenClaw");
+    // Mixed: invalid token dropped, valid kept.
+    expect(sanitizeBotAgent("中文/1.0 MyBot/1.2.0")).toBe("MyBot/1.2.0");
+  });
+
+  it("rejects tokens with too-long name or version", () => {
+    const longName = "a".repeat(33);
+    expect(sanitizeBotAgent(`${longName}/1.0`)).toBe("OpenClaw");
+    const longVersion = "1".repeat(33);
+    expect(sanitizeBotAgent(`MyBot/${longVersion}`)).toBe("OpenClaw");
+  });
+
+  it("orphan or malformed comment is dropped without breaking siblings", () => {
+    // Standalone "(foo)" without a preceding product is dropped.
+    expect(sanitizeBotAgent("(orphan) MyBot/1.0")).toBe("MyBot/1.0");
+    // "(comment)" with non-ASCII inside is dropped, product kept.
+    expect(sanitizeBotAgent("MyBot/1.0 (中文)")).toBe("MyBot/1.0");
+  });
+
+  it("truncates by dropping trailing tokens to stay within 256 bytes", () => {
+    const product = "App/1.0"; // 7 bytes
+    // Build a string longer than 256 bytes.
+    const tokens = Array.from({ length: 50 }, (_, i) => `App${i}/1.0`);
+    const input = tokens.join(" ");
+    const result = sanitizeBotAgent(input);
+    expect(result.length).toBeLessThanOrEqual(256);
+    // Should still contain at least the first product.
+    expect(result.startsWith("App0/1.0")).toBe(true);
+    // Truncation point is per-token (no half tokens).
+    expect(result.split(" ").every((t) => /^App\d+\/1\.0$/.test(t))).toBe(true);
+    // Suppress unused var warning.
+    expect(product).toBe("App/1.0");
+  });
+
+  it("never returns empty string", () => {
+    expect(sanitizeBotAgent("")).not.toBe("");
+    expect(sanitizeBotAgent("garbage")).not.toBe("");
   });
 });

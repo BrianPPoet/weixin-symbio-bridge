@@ -6,6 +6,19 @@
 /** Common request metadata attached to every CGI request. */
 export interface BaseInfo {
   channel_version?: string;
+  /**
+   * Self-declared identity of the upstream bot/app, analogous to HTTP
+   * `User-Agent`. Filled from `channels.openclaw-weixin.botAgent` in
+   * openclaw.json; defaults to `"OpenClaw"` when unset.
+   *
+   * Format: UA-style `Name/Version` tokens, optionally followed by
+   * `(comment)`, multiple tokens space-separated. ASCII only, total
+   * length <= 256 bytes after sanitization.
+   *
+   * For observability only (logging, monitoring aggregation); not used
+   * for authentication or routing.
+   */
+  bot_agent?: string;
 }
 
 /** proto: UploadMediaType */
