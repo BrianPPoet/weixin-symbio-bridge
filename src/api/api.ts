@@ -201,11 +201,10 @@ function buildCommonHeaders(): Record<string, string> {
   return headers;
 }
 
-function buildHeaders(opts: { token?: string; body: string }): Record<string, string> {
+function buildHeaders(opts: { token?: string }): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     AuthorizationType: "ilink_bot_token",
-    "Content-Length": String(Buffer.byteLength(opts.body, "utf-8")),
     "X-WECHAT-UIN": randomWechatUin(),
     ...buildCommonHeaders(),
   };
@@ -277,7 +276,7 @@ export async function apiPostFetch(params: {
 }): Promise<string> {
   const base = ensureTrailingSlash(params.baseUrl);
   const url = new URL(params.endpoint, base);
-  const hdrs = buildHeaders({ token: params.token, body: params.body });
+  const hdrs = buildHeaders({ token: params.token });
   logger.debug(`POST ${redactUrl(url.toString())} body=${redactBody(params.body)}`);
 
   const controller =

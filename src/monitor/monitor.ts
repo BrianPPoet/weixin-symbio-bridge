@@ -5,7 +5,6 @@ import { getUpdates } from "../api/api.js";
 import { WeixinConfigManager } from "../api/config-cache.js";
 import { SESSION_EXPIRED_ERRCODE, pauseSession, getRemainingPauseMs } from "../api/session-guard.js";
 import { processOneMessage } from "../messaging/process-message.js";
-import { getWeixinRuntime, waitForWeixinRuntime } from "../runtime.js";
 import { getSyncBufFilePath, loadGetUpdatesBuf, saveGetUpdatesBuf } from "../storage/sync-buf.js";
 import { logger } from "../util/logger.js";
 import type { Logger } from "../util/logger.js";
@@ -25,6 +24,11 @@ export type MonitorWeixinOpts = {
   allowFrom?: string[];
   config: import("openclaw/plugin-sdk/core").OpenClawConfig;
   runtime?: { log?: (msg: string) => void; error?: (msg: string) => void };
+  /**
+   * Gateway-injected channel runtime surface (reply/routing/session/media/commands/...).
+   * Required for inbound message processing; provided by `ChannelGatewayContext.channelRuntime`.
+   */
+  channelRuntime: PluginRuntime["channel"];
   abortSignal?: AbortSignal;
   longPollTimeoutMs?: number;
   /** Gateway status callback — called on each successful poll and inbound message. */
@@ -42,6 +46,7 @@ export async function monitorWeixinProvider(opts: MonitorWeixinOpts): Promise<vo
     token,
     accountId,
     config,
+    channelRuntime,
     abortSignal,
     longPollTimeoutMs,
     setStatus,
@@ -50,15 +55,11 @@ export async function monitorWeixinProvider(opts: MonitorWeixinOpts): Promise<vo
   const errLog = opts.runtime?.error ?? ((m: string) => log(m));
   const aLog: Logger = logger.withAccount(accountId);
 
-  aLog.info(`waiting for Weixin runtime...`);
-  let channelRuntime: PluginRuntime["channel"];
-  try {
-    const pluginRuntime = await waitForWeixinRuntime();
-    channelRuntime = pluginRuntime.channel;
-    aLog.info(`Weixin runtime acquired, channelRuntime type: ${typeof channelRuntime}`);
-  } catch (err) {
-    aLog.error(`waitForWeixinRuntime() failed: ${String(err)}`);
-    throw err;
+  if (!channelRuntime) {
+    const msg =
+      "channelRuntime missing on monitor opts; gateway must inject ChannelGatewayContext.channelRuntime";
+    aLog.error(msg);
+    throw new Error(msg);
   }
 
   log(`weixin monitor started (${baseUrl}, account=${accountId})`);

@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { ChannelPlugin, OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/infra-runtime";
 
@@ -428,6 +428,17 @@ export const weixinPlugin: ChannelPlugin<ResolvedWeixinAccount> = {
       const logPath = aLog.getLogFilePath();
       ctx.log?.info?.(`[${account.accountId}] weixin logs: ${logPath}`);
 
+      // The gateway injects the channel runtime surface per-call (task-scoped). We require it:
+      // it carries reply/routing/session/media/commands helpers used by processOneMessage.
+      // Available on hosts >= 2026.2.19 (our peerDependency is >= 2026.3.22).
+      if (!ctx.channelRuntime) {
+        const msg = `ctx.channelRuntime missing — host too old or plugin SDK contract violated`;
+        aLog.error(msg);
+        ctx.log?.error?.(`[${account.accountId}] ${msg}`);
+        ctx.setStatus?.({ accountId: account.accountId, running: false });
+        throw new Error(msg);
+      }
+
       const { monitorWeixinProvider } = await import("./monitor/monitor.js");
       return monitorWeixinProvider({
         baseUrl: account.baseUrl,
@@ -436,6 +447,7 @@ export const weixinPlugin: ChannelPlugin<ResolvedWeixinAccount> = {
         accountId: account.accountId,
         config: ctx.cfg,
         runtime: ctx.runtime,
+        channelRuntime: ctx.channelRuntime as unknown as PluginRuntime["channel"],
         abortSignal: ctx.abortSignal,
         setStatus: ctx.setStatus,
       });
