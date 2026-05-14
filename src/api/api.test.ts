@@ -1,4 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock logger
 vi.mock("../util/logger.js", () => ({
@@ -24,7 +28,15 @@ vi.mock("node:crypto", () => ({
   },
 }));
 
-import { getUpdates, getUploadUrl, sendMessage, getConfig, sendTyping, sanitizeBotAgent } from "./api.js";
+import {
+  getUpdates,
+  getUploadUrl,
+  sendMessage,
+  getConfig,
+  sendTyping,
+  sanitizeBotAgent,
+  readPackageJsonFromDir,
+} from "./api.js";
 
 function mockResponse(body: object | string, status = 200, ok = true): Response {
   const text = typeof body === "string" ? body : JSON.stringify(body);
@@ -251,5 +263,95 @@ describe("sanitizeBotAgent", () => {
   it("never returns empty string", () => {
     expect(sanitizeBotAgent("")).not.toBe("");
     expect(sanitizeBotAgent("garbage")).not.toBe("");
+  });
+});
+
+describe("readPackageJsonFromDir", () => {
+  let tmpRoot: string;
+
+  beforeEach(() => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-weixin-pkg-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  function writePkg(dir: string, contents: object) {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(contents), "utf-8");
+  }
+
+  it("finds package.json from compiled layout (dist/src/api/)", () => {
+    // Reproduces the publish-time layout: source compiles to dist/src/...
+    writePkg(tmpRoot, {
+      name: "@tencent-weixin/openclaw-weixin",
+      version: "2.4.2",
+      ilink_appid: "bot",
+    });
+    const startDir = path.join(tmpRoot, "dist", "src", "api");
+    fs.mkdirSync(startDir, { recursive: true });
+
+    const result = readPackageJsonFromDir(startDir);
+    expect(result.ilink_appid).toBe("bot");
+    expect(result.version).toBe("2.4.2");
+    expect(result.name).toBe("@tencent-weixin/openclaw-weixin");
+  });
+
+  it("finds package.json from dev layout (src/api/)", () => {
+    writePkg(tmpRoot, {
+      name: "@tencent/openclaw-weixin",
+      version: "2.4.2",
+      ilink_appid: "bot",
+    });
+    const startDir = path.join(tmpRoot, "src", "api");
+    fs.mkdirSync(startDir, { recursive: true });
+
+    const result = readPackageJsonFromDir(startDir);
+    expect(result.ilink_appid).toBe("bot");
+  });
+
+  it("skips unrelated package.json on the way up (e.g. nested node_modules dep)", () => {
+    // Outer plugin package.
+    writePkg(tmpRoot, {
+      name: "@tencent-weixin/openclaw-weixin",
+      version: "2.4.2",
+      ilink_appid: "bot",
+    });
+    // A transitive dep with its own package.json sitting between us and the
+    // plugin root — must NOT shadow the plugin's package.json.
+    const depDir = path.join(tmpRoot, "dist", "node_modules", "some-dep");
+    writePkg(depDir, { name: "some-dep", version: "9.9.9" });
+    const startDir = path.join(depDir, "lib");
+    fs.mkdirSync(startDir, { recursive: true });
+
+    const result = readPackageJsonFromDir(startDir);
+    expect(result.name).toBe("@tencent-weixin/openclaw-weixin");
+    expect(result.ilink_appid).toBe("bot");
+  });
+
+  it("returns empty object when no matching package.json exists", () => {
+    const startDir = path.join(tmpRoot, "nowhere", "deep");
+    fs.mkdirSync(startDir, { recursive: true });
+
+    const result = readPackageJsonFromDir(startDir);
+    expect(result).toEqual({});
+  });
+
+  it("tolerates malformed package.json and keeps walking", () => {
+    // Drop a broken package.json closer to startDir; valid one further up.
+    const brokenDir = path.join(tmpRoot, "dist");
+    fs.mkdirSync(brokenDir, { recursive: true });
+    fs.writeFileSync(path.join(brokenDir, "package.json"), "{not-json", "utf-8");
+    writePkg(tmpRoot, {
+      name: "@tencent-weixin/openclaw-weixin",
+      version: "2.4.2",
+      ilink_appid: "bot",
+    });
+    const startDir = path.join(brokenDir, "src", "api");
+    fs.mkdirSync(startDir, { recursive: true });
+
+    const result = readPackageJsonFromDir(startDir);
+    expect(result.ilink_appid).toBe("bot");
   });
 });

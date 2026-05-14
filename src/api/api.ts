@@ -38,14 +38,49 @@ interface PackageJson {
   ilink_appid?: string;
 }
 
-function readPackageJson(): PackageJson {
+/**
+ * Identify whether a parsed package.json belongs to this plugin.
+ *
+ * The walk-up search may pass through unrelated `package.json` files
+ * (e.g. nested `node_modules/<dep>/package.json`); only ours is accepted.
+ */
+function isOwnPackageJson(parsed: PackageJson): boolean {
+  if (parsed.ilink_appid !== undefined) return true;
+  return typeof parsed.name === "string" && parsed.name.includes("openclaw-weixin");
+}
+
+/**
+ * Walk up from `startDir` searching for the plugin's own `package.json`.
+ *
+ * Resilient to differing layouts between dev (TS source under `src/`) and
+ * publish (compiled output under `dist/src/`) by not assuming a fixed depth.
+ */
+export function readPackageJsonFromDir(startDir: string): PackageJson {
   try {
-    const dir = path.dirname(fileURLToPath(import.meta.url));
-    const pkgPath = path.resolve(dir, "..", "..", "package.json");
-    return JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as PackageJson;
+    let dir = startDir;
+    const { root } = path.parse(dir);
+    while (dir && dir !== root) {
+      const candidate = path.join(dir, "package.json");
+      if (fs.existsSync(candidate)) {
+        try {
+          const parsed = JSON.parse(fs.readFileSync(candidate, "utf-8")) as PackageJson;
+          if (isOwnPackageJson(parsed)) {
+            return parsed;
+          }
+        } catch {
+          // Malformed package.json — keep walking up.
+        }
+      }
+      dir = path.dirname(dir);
+    }
   } catch {
-    return {};
+    // Fall through to empty default.
   }
+  return {};
+}
+
+function readPackageJson(): PackageJson {
+  return readPackageJsonFromDir(path.dirname(fileURLToPath(import.meta.url)));
 }
 
 const pkg = readPackageJson();

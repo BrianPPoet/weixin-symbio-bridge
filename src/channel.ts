@@ -373,6 +373,15 @@ export const weixinPlugin: ChannelPlugin<ResolvedWeixinAccount> = {
           );
           log(`⚠️  保存账号数据失败: ${String(err)}`);
         }
+      } else if (waitResult.alreadyConnected) {
+        // Server confirmed this OpenClaw is already bound to the scanned bot;
+        // local credentials are intact, nothing to persist. Exit successfully
+        // so that automated installers don't treat re-runs as login failures.
+        // The QR poller already wrote the user-facing message to stdout, so
+        // we deliberately do NOT echo it again via `log(...)`.
+        logger.info(
+          `auth.login: bot already connected to this OpenClaw accountId=${account.accountId}`,
+        );
       } else {
         logger.warn(
           `auth.login: login did not complete accountId=${account.accountId} message=${waitResult.message}`,

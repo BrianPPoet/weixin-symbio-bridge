@@ -4,6 +4,51 @@
 
 This project follows the [Keep a Changelog](https://keepachangelog.com/) format.
 
+## [2.4.3] - 2026-05-08
+
+### Fixed
+
+- **`iLink-App-Id` / `iLink-App-ClientVersion` headers were empty / `0` in production.** `readPackageJson` resolved `package.json` via a fixed `../../` from `import.meta.url`, but the TypeScript build (with `index.ts` plus `src/**/*.ts` in `tsconfig.include`) emits `dist/src/api/api.js` (extra `src/` segment), so the resolved path landed on the non-existent `dist/package.json` and the catch returned `{}`. Replaced with a walk-up that searches for the plugin's own `package.json` (validated by `name` containing `openclaw-weixin` or by the presence of `ilink_appid`), tolerating both dev (`src/api/`) and built (`dist/src/api/`) layouts. Adds tests in `src/api/api.test.ts` covering the compiled layout, dev layout, nested `node_modules/<dep>/package.json` shadowing, missing manifest, and malformed manifest.
+- **`openclaw channels login` exited non-zero when the bot was already bound to this OpenClaw**, which caused automated installers (e.g. `openclaw-weixin-installer`) to report a misleading "首次连接未完成" message and continue past a successful state. The QR poller now returns `alreadyConnected: true` for the server's `binded_redirect` status, and `auth.login` in `channel.ts` treats it as a successful no-op (no save, no throw) so the CLI exits cleanly.
+
+## [2.4.2] - 2026-05-07
+
+### Fixed
+
+- **Node 24 / undici compatibility — `TypeError: fetch failed` on every request.** Drop the manually-set `Content-Length` header from `buildHeaders`. The bundled undici in Node 24 rejects pre-set `Content-Length` with `UND_ERR_INVALID_ARG: invalid content-length header`, breaking all CGI calls. Letting `fetch` compute it from the request body restores network calls on Node 24.
+- **OpenClaw ≥ 2026.5.x — Weixin runtime initialization timeout restart loop.** Replace the module-scope `pluginRuntime` global (and remove `src/runtime.ts` along with it) with the `ctx.channelRuntime` injected by the gateway per call. The previous global was set during plugin registration, but newer hosts inject a per-call runtime surface, so the global was missing/stale at startup and the channel kept timing out and restarting.
+
+### Removed
+
+- **Dead scripts and shims:** `scripts/test-full-upload.ts` / `scripts/test-upload-url.ts` debug scripts and the unused legacy `index.ts` re-exports. No behavior change for consumers.
+
+## [2.4.1] - 2026-05-04
+
+### Added
+
+- **Ship compiled runtime in the npm tarball:** `dist/` is added to `files` and `package.json#openclaw.runtimeExtensions` is set to `["./dist/index.js"]`. The host loads the prebuilt JS entry directly instead of relying on source-only TypeScript at install time, which avoids the `requires compiled runtime output for TypeScript entry index.ts` error on stricter host versions.
+- **`openclaw.plugin.json` channel config:** Declare `channels` and `channelConfigs` in `openclaw.plugin.json` so newer hosts (≥ 2026.4.x) can render the channel selection UI without falling back to `package.json#openclaw`.
+
+## [2.3.1] - 2026-04-28
+
+### Added
+
+- **`bot_agent` request field:** Outgoing CGI requests now carry an upstream-app-supplied `bot_agent` (UA-style `name/version (comment)` grammar, multi-product allowed). Configurable per upstream app via channel config and sanitized by `sanitizeBotAgent` in `src/api/api.ts`; falls back to `OpenClaw` when missing or invalid.
+- **`local_token_list` on QR fetch:** `fetchQRCode` now posts the most recent local `bot_token`s (up to 10), enabling the server to recognize already-bound bots and reply with `binded_redirect` instead of issuing a duplicate session.
+- **Pair-code login flow:** Support entering a pair-code (`verify_code`) when the QR scan triggers a server-side challenge; `waitForWeixinLogin` handles `need_verifycode` / `verify_code_blocked` states with a stdin prompt and bounded retries.
+- **`binded_redirect` handling:** New status branch in QR polling that prints `✅ 已连接过此 OpenClaw，无需重复连接。` and returns gracefully when the scanned bot is already bound to this OpenClaw.
+- **Connection status notify (start/stop):** Emit `notifyStart` from `gateway.startAccount` (after the provider is announced) and `notifyStop` from a new `gateway.stopAccount` hook, so the upstream Weixin server can reconcile per-account online state.
+
+### Changed
+
+- **QR login UX:** Reword the QR/scan prompts and remove the client-side timeout from `fetchQRCode` / `startWeixinLoginWithQr` — only server / stack limits now bound the long-poll.
+
+## [2.1.10] - 2026-04-24
+
+### Added
+
+- **Connection status notify (start/stop) — initial introduction:** `notifyStart` on account startup and `notifyStop` on shutdown via the new `gateway.stopAccount` hook. (Carried into the 2.3.x line as well.)
+
 ## [2.1.9] - 2026-04-20
 
 ### Added
