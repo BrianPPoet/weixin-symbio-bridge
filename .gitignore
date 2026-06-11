@@ -1,11 +1,6 @@
-node_modules/
 dist/
-*.log
+node_modules/
 .DS_Store
 .env
-.env.*
-*.tsbuildinfo
-coverage/
-openclaw/
-pnpm-lock.yaml
-pnpm-workspace.yaml
+*.log
+state/

@@ -1,0 +1,19 @@
+{
+  "stateDir": "~/.local/state/weixin-symbio-bridge",
+  "botAgent": "SymbioWeixinBridge/0.1.0",
+  "logLevel": "info",
+  "security": {
+    "allowFrom": []
+  },
+  "reply": {
+    "maxChars": 3500,
+    "unsupportedText": "I received this, but this bridge currently handles text messages only."
+  },
+  "agent": {
+    "type": "http",
+    "endpoint": "http://127.0.0.1:8788/enqueue",
+    "timeoutMs": 15000,
+    "replyMode": "ack",
+    "ackText": "Queued for Symbio."
+  }
+}
